@@ -40,20 +40,15 @@ URL_PARAMS = {
     "key206": "ADDR,PHONE,EMAIL,NAME",
 }
 
-LOG_ERROR_LOCATION = "/opt/splunk/var/log/splunk/neustar_error.log"
-LOG_ROTATION_LOCATION = "/opt/splunk/var/log/splunk/neustar.log"
+LOG_ROTATION_LOCATION = "/opt/splunk/var/log/splunk/neustar_command.log"
 LOG_ROTATION_BYTES = 1 * 1024 * 1024
-LOG_ROTATION_LIMIT = 10
-
-THREADS = 16
+LOG_ROTATION_LIMIT = 5
 
 logger = logging.getLogger("neustar")
 logger.setLevel(logging.INFO)
 handler = logging.handlers.RotatingFileHandler(LOG_ROTATION_LOCATION, maxBytes=LOG_ROTATION_BYTES, backupCount=LOG_ROTATION_LIMIT)
 handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s"))
 logger.addHandler(handler)
-
-pool = ThreadPoolExecutor(THREADS)
 
 def neustar_query(input_field):
     params = URL_PARAMS.copy()
@@ -73,11 +68,12 @@ def neustar_query(input_field):
     try:
         start = time.time()
         r = requests.get(URL_BASE, params=params)
-        output_fields["neustar_ms"] = (time.time() - start)*1000
+        output_fields["neustar_ms"] = (time.time() - start) * 1000
 
         r.raise_for_status()
         r_json = r.json()
         errorcode = r_json["errorcode"]
+        output_fields["neustar_json"] = r.text
 
         logger.info("url: " + r.url)
         logger.debug("response: " + r.text)
@@ -91,11 +87,12 @@ def neustar_query(input_field):
             output_fields["neustar_address"] = re.sub(r"\^", " ", values[3])
             output_fields["neustar_email"] = values[5]
             output_fields["neustar_name"] = re.sub(r"([^^]+)\^(.+)\|", r"\2 \1", values[7])
-            output_fields["neustar_json"] = r.text
-            output_fields["neustar_msg"] = "OK. Matched on " + input_type
+            output_fields["neustar_msg"] = "Matched on " + input_type + "."
         elif errorcode == "6":
-            output_fields["neustar_msg"] = "OK. No match."
-            output_fields["neustar_json"] = r.text
+            output_fields["neustar_msg"] = "Error code 6. No match."
+        else:
+            output_fields["neustar_msg"] = "Error code " + errorcode + "."
+
     except requests.exceptions.HTTPError as err:
         output_fields["neustar_msg"] = err
         pass
@@ -107,20 +104,24 @@ def neustar_query(input_field):
 
 @Configuration()
 class NeustarCommand(StreamingCommand):
-    input_field = Option(require=True)
+    threads = Option(require=False, default=8, validate=validators.Integer())
+
+    pool = ThreadPoolExecutor(threads)
 
     def stream(self, records):
         def thread(records):
             def update_record(record):
-                output_fields = neustar_query(record[self.input_field])
+                input_field = self.fieldnames[0]
+
+                output_fields = neustar_query(record[input_field])
                 record.update(output_fields)
                 return record
 
             chunk = []
             for record in records:
                 # submit update_record(record) into pool, keep resulting Future
-                chunk.append(pool.submit(update_record, record))
-                if len(chunk) == THREADS:
+                chunk.append(self.pool.submit(update_record, record))
+                if len(chunk) == self.threads:
                     yield chunk
                     chunk = []
 
@@ -136,12 +137,5 @@ class NeustarCommand(StreamingCommand):
         # Now iterate over all results in same order as records
         for result in unchunk(thread(records)):
             yield result
-
-        # Normal (non-threaded) method:
-        #for record in records:
-        #    output_fields = neustar_query(record[self.input_field])
-
-        #    record.update(output_fields)
-        #    yield record
 
 dispatch(NeustarCommand, sys.argv, sys.stdin, sys.stdout, __name__)
