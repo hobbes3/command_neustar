@@ -112,7 +112,7 @@ class NeustarCommand(StreamingCommand):
     def stream(self, records):
         def thread(records):
             def update_record(record):
-                output_fields = neustar_query(record["data"])
+                output_fields = neustar_query(record[self.input_field])
                 record.update(output_fields)
                 return record
 
