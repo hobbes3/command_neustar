@@ -68,7 +68,7 @@ def neustar_query(input_value):
     try:
         start = time.time()
         r = requests.get(URL_BASE, params=params)
-        output_fields["neustar_ms"] = (time.time() - start) * 1000
+        output_fields["neustar_time_ms"] = (time.time() - start) * 1000
 
         r.raise_for_status()
         r_json = r.json()
