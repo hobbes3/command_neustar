@@ -50,19 +50,19 @@ handler = logging.handlers.RotatingFileHandler(LOG_ROTATION_LOCATION, maxBytes=L
 handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s"))
 logger.addHandler(handler)
 
-def neustar_query(input_field):
+def neustar_query(input_value):
     params = URL_PARAMS.copy()
     output_fields = {}
 
-    if "@" in input_field:
+    if "@" in input_value:
         input_type = "email"
         params.update({
-            "key572": input_field
+            "key572": input_value
         })
     else:
         input_type = "phone"
         params.update({
-            "key1": input_field
+            "key1": input_value
         })
 
     try:
