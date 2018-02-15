@@ -45,82 +45,89 @@ LOG_ROTATION_BYTES = 1 * 1024 * 1024
 LOG_ROTATION_LIMIT = 5
 
 logger = logging.getLogger("neustar")
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 handler = logging.handlers.RotatingFileHandler(LOG_ROTATION_LOCATION, maxBytes=LOG_ROTATION_BYTES, backupCount=LOG_ROTATION_LIMIT)
 handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s"))
 logger.addHandler(handler)
 
-def neustar_query(input_value):
-    params = URL_PARAMS.copy()
-    output_fields = {}
-
-    if "@" in input_value:
-        input_type = "email"
-        params.update({
-            "key572": input_value
-        })
-    else:
-        input_type = "phone"
-        params.update({
-            "key1": input_value
-        })
-
-    try:
-        start = time.time()
-        r = requests.get(URL_BASE, params=params)
-        output_fields["neustar_time_ms"] = (time.time() - start) * 1000
-
-        r.raise_for_status()
-        r_json = r.json()
-        errorcode = r_json["errorcode"]
-        output_fields["neustar_json"] = r.text
-
-        logger.info("url: " + r.url)
-        logger.debug("response: " + r.text)
-        logger.debug("errorcode: " + errorcode)
-
-        if errorcode == "0":
-            # |1,5034426116,1,450^SE^5TH^AVE^^APT^2^HILLSBORO^OR^97123,1,lovemychildrendo2@yahoo.com,1,LAKEY^SHERRY|
-            logger.debug("response count: " + str(len(r_json["response"])))
-            values = r_json["response"][0]["result"][0]["value"].split(",")
-
-            output_fields["neustar_address"] = re.sub(r"\^", " ", values[3])
-            output_fields["neustar_email"] = values[5]
-            output_fields["neustar_name"] = re.sub(r"([^^]+)\^(.+)\|", r"\2 \1", values[7])
-            output_fields["neustar_msg"] = "Matched on " + input_type + "."
-        elif errorcode == "6":
-            output_fields["neustar_msg"] = "Error code 6. No match."
-        else:
-            output_fields["neustar_msg"] = "Error code " + errorcode + "."
-
-    except requests.exceptions.HTTPError as err:
-        output_fields["neustar_msg"] = err
-        pass
-    except requests.exceptions.RequestException as e:
-        output_fields["neustar_msg"] = e
-        pass
-
-    return output_fields
-
 @Configuration()
 class NeustarCommand(StreamingCommand):
     threads = Option(require=False, default=8, validate=validators.Integer())
-
     pool = ThreadPoolExecutor(threads)
 
     def stream(self, records):
+        def neustar_query(record_dict):
+            params = URL_PARAMS.copy()
+
+            record = record_dict["record"]
+            input_field = record_dict["field"]
+            input_value = record[input_field].strip()
+
+            output_fields = {}
+            output_fields[input_field + "_json"] = ""
+            output_fields[input_field + "_time_ms"] = ""
+            output_fields[input_field + "_msg"] = ""
+            output_fields[input_field + "_name"] = ""
+            output_fields[input_field + "_phone"] = ""
+            output_fields[input_field + "_email"] = ""
+            output_fields[input_field + "_address"] = ""
+
+            if input_value:
+                if "@" in input_value:
+                    input_type = "email"
+                    params.update({
+                        "key572": input_value
+                    })
+                else:
+                    input_type = "phone"
+                    params.update({
+                        "key1": input_value
+                    })
+
+                try:
+                    start = time.time()
+                    r = requests.get(URL_BASE, params=params)
+                    output_fields[input_field + "_time_ms"] = (time.time() - start) * 1000
+
+                    r.raise_for_status()
+                    r_json = r.json()
+                    errorcode = r_json["errorcode"]
+                    output_fields[input_field + "_json"] = r.text
+
+                    logger.info("url: " + r.url)
+
+                    if errorcode == "0":
+                        # |1,5034426116,1,450^SE^5TH^AVE^^APT^2^HILLSBORO^OR^97123,1,lovemychildrendo2@yahoo.com,1,LAKEY^SHERRY|
+                        values = r_json["response"][0]["result"][0]["value"].split(",")
+
+                        output_fields[input_field + "_address"] = re.sub(r"\^", " ", values[3])
+                        output_fields[input_field + "_email"] = values[5]
+                        output_fields[input_field + "_name"] = re.sub(r"([^^]+)\^(.+)\|", r"\2 \1", values[7])
+                        output_fields[input_field + "_msg"] = "Matched on " + input_type + "."
+                    elif errorcode == "6":
+                        output_fields[input_field + "_msg"] = "Error code 6. No match."
+                    else:
+                        output_fields[input_field + "_msg"] = "Error code " + errorcode + "."
+
+                except requests.exceptions.HTTPError as err:
+                    output_fields[input_field + "_msg"] = err
+                    pass
+                except requests.exceptions.RequestException as e:
+                    output_fields[input_field + "_msg"] = e
+                    pass
+
+            record.update(output_fields)
+            logger.debug(record)
+
+            return record
+
         def thread(records):
-            def update_record(record):
-                input_field = self.fieldnames[0]
-
-                output_fields = neustar_query(record[input_field])
-                record.update(output_fields)
-                return record
-
             chunk = []
             for record in records:
-                # submit update_record(record) into pool, keep resulting Future
-                chunk.append(self.pool.submit(update_record, record))
+                #for field in self.fieldnames:
+
+                chunk.append(self.pool.submit(neustar_query, {"record": record, "field": self.fieldnames[0]}))
+
                 if len(chunk) == self.threads:
                     yield chunk
                     chunk = []
@@ -137,5 +144,7 @@ class NeustarCommand(StreamingCommand):
         # Now iterate over all results in same order as records
         for result in unchunk(thread(records)):
             yield result
+
+        logger.debug("DONE\n\n\n")
 
 dispatch(NeustarCommand, sys.argv, sys.stdin, sys.stdout, __name__)
