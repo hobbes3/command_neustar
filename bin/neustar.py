@@ -131,7 +131,7 @@ class NeustarCommand(StreamingCommand):
                 for field in self.fieldnames:
                     chunk.append(pool.submit(neustar_query, {"record": record, "field": field}))
 
-                if len(chunk) == self.threads:
+                if len(chunk) >= self.threads:
                     yield chunk
                     chunk = []
 
