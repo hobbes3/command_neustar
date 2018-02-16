@@ -47,21 +47,24 @@ LOG_ROTATION_LIMIT = 5
 logger = logging.getLogger("neustar")
 logger.setLevel(logging.DEBUG)
 handler = logging.handlers.RotatingFileHandler(LOG_ROTATION_LOCATION, maxBytes=LOG_ROTATION_BYTES, backupCount=LOG_ROTATION_LIMIT)
-handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s"))
+handler.setFormatter(logging.Formatter("[%(levelname)s] (%(threadName)-10s) %(message)s"))
 logger.addHandler(handler)
 
 @Configuration()
 class NeustarCommand(StreamingCommand):
     threads = Option(require=False, default=8, validate=validators.Integer())
-    pool = ThreadPoolExecutor(threads)
 
     def stream(self, records):
+        pool = ThreadPoolExecutor(self.threads)
+
         def neustar_query(record_dict):
             params = URL_PARAMS.copy()
 
             record = record_dict["record"]
             input_field = record_dict["field"]
             input_value = record[input_field].strip()
+
+            logger.info("input_field: " + input_field)
 
             output_fields = {}
             output_fields[input_field + "_json"] = ""
@@ -117,6 +120,7 @@ class NeustarCommand(StreamingCommand):
                     pass
 
             record.update(output_fields)
+            logger.info("new record:")
             logger.debug(record)
 
             return record
@@ -124,9 +128,8 @@ class NeustarCommand(StreamingCommand):
         def thread(records):
             chunk = []
             for record in records:
-                #for field in self.fieldnames:
-
-                chunk.append(self.pool.submit(neustar_query, {"record": record, "field": self.fieldnames[0]}))
+                for field in self.fieldnames:
+                    chunk.append(pool.submit(neustar_query, {"record": record, "field": field}))
 
                 if len(chunk) == self.threads:
                     yield chunk
@@ -142,8 +145,9 @@ class NeustarCommand(StreamingCommand):
                     yield f.result() # get result from Future
 
         # Now iterate over all results in same order as records
-        for result in unchunk(thread(records)):
-            yield result
+        for i, result in enumerate(unchunk(thread(records))):
+            if (i + 1) % len(self.fieldnames) == 0:
+                yield result
 
         logger.debug("DONE\n\n\n")
 
