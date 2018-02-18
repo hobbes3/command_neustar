@@ -58,20 +58,25 @@ class NeustarCommand(StreamingCommand):
         pool = ThreadPoolExecutor(self.threads)
 
         def neustar_query(record):
+            output_fields = [
+                "json",
+                "time_ms",
+                "msg",
+                "name",
+                "phone",
+                "email",
+                "address",
+            ]
+
             for key in self.fieldnames:
+                # You have to set all possible output fields to ""
+                # otherwise if the first row doesn't set the fields
+                # then the rest of the rows can't set it.
+                for field in output_fields:
+                    record[key + "_" + field] = ""
+
                 params = URL_PARAMS.copy()
-
                 value = record[key].strip()
-
-                logger.info("key: " + key)
-
-                record[key + "_json"] = ""
-                record[key + "_time_ms"] = ""
-                record[key + "_msg"] = ""
-                record[key + "_name"] = ""
-                record[key + "_phone"] = ""
-                record[key + "_email"] = ""
-                record[key + "_address"] = ""
 
                 if value:
                     if "@" in value:
