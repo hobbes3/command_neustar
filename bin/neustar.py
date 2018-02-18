@@ -57,79 +57,72 @@ class NeustarCommand(StreamingCommand):
     def stream(self, records):
         pool = ThreadPoolExecutor(self.threads)
 
-        def neustar_query(record_dict):
-            params = URL_PARAMS.copy()
+        def neustar_query(record):
+            for key in self.fieldnames:
+                params = URL_PARAMS.copy()
 
-            record = record_dict["record"]
-            input_field = record_dict["field"]
-            input_value = record[input_field].strip()
+                value = record[key].strip()
 
-            logger.info("input_field: " + input_field)
+                logger.info("key: " + key)
 
-            output_fields = {}
-            output_fields[input_field + "_json"] = ""
-            output_fields[input_field + "_time_ms"] = ""
-            output_fields[input_field + "_msg"] = ""
-            output_fields[input_field + "_name"] = ""
-            output_fields[input_field + "_phone"] = ""
-            output_fields[input_field + "_email"] = ""
-            output_fields[input_field + "_address"] = ""
+                record[key + "_json"] = ""
+                record[key + "_time_ms"] = ""
+                record[key + "_msg"] = ""
+                record[key + "_name"] = ""
+                record[key + "_phone"] = ""
+                record[key + "_email"] = ""
+                record[key + "_address"] = ""
 
-            if input_value:
-                if "@" in input_value:
-                    input_type = "email"
-                    params.update({
-                        "key572": input_value
-                    })
-                else:
-                    input_type = "phone"
-                    params.update({
-                        "key1": input_value
-                    })
-
-                try:
-                    start = time.time()
-                    r = requests.get(URL_BASE, params=params)
-                    output_fields[input_field + "_time_ms"] = (time.time() - start) * 1000
-
-                    r.raise_for_status()
-                    r_json = r.json()
-                    errorcode = r_json["errorcode"]
-                    output_fields[input_field + "_json"] = r.text
-
-                    logger.info("url: " + r.url)
-
-                    if errorcode == "0":
-                        # |1,5034426116,1,450^SE^5TH^AVE^^APT^2^HILLSBORO^OR^97123,1,lovemychildrendo2@yahoo.com,1,LAKEY^SHERRY|
-                        values = r_json["response"][0]["result"][0]["value"].split(",")
-
-                        output_fields[input_field + "_address"] = re.sub(r"\^", " ", values[3])
-                        output_fields[input_field + "_email"] = values[5]
-                        output_fields[input_field + "_name"] = re.sub(r"([^^]+)\^(.+)\|", r"\2 \1", values[7])
-                        output_fields[input_field + "_msg"] = "Matched on " + input_type + "."
-                    elif errorcode == "6":
-                        output_fields[input_field + "_msg"] = "Error code 6. No match."
+                if value:
+                    if "@" in value:
+                        input_type = "email"
+                        params.update({
+                            "key572": value
+                        })
                     else:
-                        output_fields[input_field + "_msg"] = "Error code " + errorcode + "."
+                        input_type = "phone"
+                        params.update({
+                            "key1": value
+                        })
 
-                except requests.exceptions.HTTPError as err:
-                    output_fields[input_field + "_msg"] = err
-                    pass
-                except requests.exceptions.RequestException as e:
-                    output_fields[input_field + "_msg"] = e
-                    pass
+                    try:
+                        start = time.time()
+                        r = requests.get(URL_BASE, params=params)
+                        record[key + "_time_ms"] = (time.time() - start) * 1000
 
-            record.update(output_fields)
-            logger.info("new record:")
-            logger.debug(record)
+                        r.raise_for_status()
+                        r_json = r.json()
+                        errorcode = r_json["errorcode"]
+                        record[key + "_json"] = r.text
+
+                        logger.info("url: " + r.url)
+
+                        if errorcode == "0":
+                            # |1,5034426116,1,450^SE^5TH^AVE^^APT^2^HILLSBORO^OR^97123,1,lovemychildrendo2@yahoo.com,1,LAKEY^SHERRY|
+                            values = r_json["response"][0]["result"][0]["value"].split(",")
+
+                            record[key + "_address"] = re.sub(r"\^", " ", values[3])
+                            record[key + "_email"] = values[5]
+                            record[key + "_name"] = re.sub(r"([^^]+)\^(.+)\|", r"\2 \1", values[7])
+                            record[key + "_msg"] = "Matched on " + input_type + "."
+                        elif errorcode == "6":
+                            record[key + "_msg"] = "Error code 6. No match."
+                        else:
+                            record[key + "_msg"] = "Error code " + errorcode + "."
+
+                    except requests.exceptions.HTTPError as err:
+                        record[key + "_msg"] = err
+                        pass
+                    except requests.exceptions.RequestException as e:
+                        record[key + "_msg"] = e
+                        pass
 
             return record
 
         def thread(records):
             chunk = []
             for record in records:
-                for field in self.fieldnames:
-                    chunk.append(pool.submit(neustar_query, {"record": record, "field": field}))
+                chunk.append(pool.submit(neustar_query, record))
 
                 if len(chunk) >= self.threads:
                     yield chunk
@@ -145,9 +138,8 @@ class NeustarCommand(StreamingCommand):
                     yield f.result() # get result from Future
 
         # Now iterate over all results in same order as records
-        for i, result in enumerate(unchunk(thread(records))):
-            if (i + 1) % len(self.fieldnames) == 0:
-                yield result
+        for result in unchunk(thread(records)):
+            yield result
 
         logger.debug("DONE\n\n\n")
 
