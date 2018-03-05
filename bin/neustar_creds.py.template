@@ -1,0 +1,6 @@
+#!/usr/bin/env python
+
+# Rename this file to neustar_creds.py
+
+username = "my_username"
+password = "my_password"
