@@ -53,6 +53,7 @@ logger.addHandler(handler)
 @Configuration()
 class NeustarCommand(StreamingCommand):
     threads = Option(require=False, default=8, validate=validators.Integer())
+    null_value = Option(require=False, default="")
 
     def stream(self, records):
         pool = ThreadPoolExecutor(self.threads)
@@ -72,57 +73,76 @@ class NeustarCommand(StreamingCommand):
                 # You have to set all possible output fields to ""
                 # otherwise if the first row doesn't set the fields
                 # then the rest of the rows can't set it.
+
+                values = record[key]
+
                 for output_field in output_fields:
                     field = key + "_" + output_field
-                    if field in record and not record[field]:
-	                record[field] = ""
 
-                params = URL_PARAMS.copy()
-                value = record[key].strip()
+                    if values or field not in record:
+                        record[field] = []
 
-                if value:
-                    if "@" in value:
-                        input_type = "email"
-                        params.update({
-                            "key572": value
-                        })
-                    else:
-                        input_type = "phone"
-                        params.update({
-                            "key1": value
-                        })
+                if isinstance(values, str):
+                    values = [values]
 
-                    try:
-                        start = time.time()
-                        r = requests.get(URL_BASE, params=params)
-                        record[key + "_time_ms"] = (time.time() - start) * 1000
+                for value in values:
+                    value = value.strip()
 
-                        r.raise_for_status()
-                        r_json = r.json()
-                        errorcode = r_json["errorcode"]
-                        record[key + "_json"] = r.text
+                    if value:
+                        for output_field in output_fields:
+                            field = key + "_" + output_field
+                            record[field].append(self.null_value)
 
-                        logger.info("url: " + r.url)
+                        params = URL_PARAMS.copy()
 
-                        if errorcode == "0":
-                            # |1,5034426116,1,450^SE^5TH^AVE^^APT^2^HILLSBORO^OR^97123,1,lovemychildrendo2@yahoo.com,1,LAKEY^SHERRY|
-                            values = r_json["response"][0]["result"][0]["value"].split(",")
-
-                            record[key + "_address"] = re.sub(r"\^", " ", values[3])
-                            record[key + "_email"] = values[5]
-                            record[key + "_name"] = re.sub(r"([^^]+)\^(.+)\|", r"\2 \1", values[7])
-                            record[key + "_msg"] = "Matched on " + input_type + "."
-                        elif errorcode == "6":
-                            record[key + "_msg"] = "Error code 6. No match."
+                        if "@" in value:
+                            input_type = "email"
+                            params.update({
+                                "key572": value
+                            })
                         else:
-                            record[key + "_msg"] = "Error code " + errorcode + "."
+                            input_type = "phone"
+                            params.update({
+                                "key1": value
+                            })
 
-                    except requests.exceptions.HTTPError as err:
-                        record[key + "_msg"] = err
-                        pass
-                    except requests.exceptions.RequestException as e:
-                        record[key + "_msg"] = e
-                        pass
+                        try:
+                            start = time.time()
+                            r = requests.get(URL_BASE, params=params)
+                            record[key + "_time_ms"][-1] = (time.time() - start) * 1000
+
+                            r.raise_for_status()
+                            r_json = r.json()
+                            errorcode = r_json["errorcode"]
+                            record[key + "_json"][-1] = r.text
+
+                            logger.info("url: " + r.url)
+
+                            if errorcode == "0":
+                                # |1,5034426116,1,450^SE^5TH^AVE^^APT^2^HILLSBORO^OR^97123,1,lovemychildrendo2@yahoo.com,1,LAKEY^SHERRY|
+                                outputs = r_json["response"][0]["result"][0]["value"].split(",")
+                                name = re.sub(r"([^^]+)\^(.+)\|", r"\2 \1", outputs[7])
+                                email = outputs[5]
+                                phone = outputs[1]
+                                address = re.sub(r"\^", " ", outputs[3])
+
+                                if name: record[key + "_name"][-1] = name
+                                if email: record[key + "_email"][-1] = email
+                                if phone: record[key + "_phone"][-1] = phone
+                                if address: record[key + "_address"][-1] = address
+
+                                record[key + "_msg"][-1] = "Matched on " + input_type + "."
+                            elif errorcode == "6":
+                                record[key + "_msg"][-1] = "Error code 6. No match."
+                            else:
+                                record[key + "_msg"][-1] = "Error code " + errorcode + "."
+
+                        except requests.exceptions.HTTPError as err:
+                            record[key + "_msg"][-1] = err
+                            pass
+                        except requests.exceptions.RequestException as e:
+                            record[key + "_msg"][-1] = e
+                            pass
 
             return record
 
